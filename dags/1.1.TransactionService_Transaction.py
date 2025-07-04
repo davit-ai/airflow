@@ -10,48 +10,23 @@ from airflow import DAG
 from airflow.hooks.base_hook import BaseHook
 from airflow.operators.python_operator import PythonOperator
 from connection import get_reportdb_connection, get_transaction_connection
+from TableInformation import get_fromdate_todate, get_Table_columns
 from utilities import default_args
 
 local_tz = pendulum.timezone("Asia/Kuala_Lumpur")
 
-p_tags = ["Transaction_Transaction", "Report_UAT"]
+Report_table_name = "TransactionService_Transaction"
 
 dag = DAG(
     "1.01.initial_Transaction",
     default_args=default_args,
     description="Transfer data from mssql.dbo.mirs to postgres.public.report",
     schedule_interval="*/5 * * * *",
-    catchup=False,
-    max_active_runs=1,
-    concurrency=1,
-    tags=["Transaction_Transaction", "Report_UAT"],
+    tags=[
+        f"{Report_table_name.split('_')[0]}_{Report_table_name.split('_')[1]}",
+        "Report_UAT",
+    ],
 )
-
-
-def get_Transaction_columns(dest_cur):
-    dest_cur.execute("""
-        SELECT column_name
-        FROM report_table_list
-        WHERE table_name = 'TransactionService_Transaction'
-        ORDER BY order_position
-    """)
-    columns = dest_cur.fetchall()
-    column_names = [f'"{col[0]}"' for col in columns]
-    logging.info(f"Destination columns: {column_names}")
-    return column_names
-
-
-def get_fromdate_todate(dest_cur):
-    dest_cur.execute("""
-       selecT p_fromdate,p_todate,p_synchour,p_primarykey ,p_last_sync_date from synchour('TransactionService_Transaction');
-    """)
-    p_fromdate, p_todate, p_synchour, p_primarykey, p_last_sync_date = (
-        dest_cur.fetchone()
-    )
-    logging.info(
-        f"startingQueryDate {p_fromdate}, EndQueryDate: {p_todate},Syncing Hour: {p_synchour}"
-    )
-    return p_fromdate, p_todate, p_synchour, p_primarykey, p_last_sync_date
 
 
 def get_rows_for_update(
@@ -83,11 +58,16 @@ def transfer_data():
         logging.info("Connected to destination database.")
 
         with source_conn.cursor() as source_cur, dest_conn.cursor() as dest_cur:
-            column_names = get_Transaction_columns(dest_cur)
+            column_names = get_Table_columns(
+                dest_cur=get_reportdb_connection().cursor(),
+                table_name="TransactionService_Transaction",
+            )
             column_str = ", ".join(column_names)
 
             (p_fromdate, p_todate, p_synchour, p_primarykey, p_last_sync_date) = (
-                get_fromdate_todate(dest_cur)
+                get_fromdate_todate(
+                    dest_cur, table_name="TransactionService_Transaction"
+                )
             )
 
             if p_synchour is None:
