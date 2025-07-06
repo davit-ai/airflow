@@ -17,7 +17,7 @@ def get_configuration_connection():
         f"PWD={source_conn.password};"
         "TrustServerCertificate=yes;"
     )
-    return pyodbc.connect(conn_str)
+    return pyodbc.connect(conn_str), source_conn.schema
 
 
 def close_sql_server_connection(conn):
@@ -69,5 +69,13 @@ def get_auth_connection():
 def get_reportdb_connection():
     dest_conn_info = BaseHook.get_connection("MIRS_REPORT_DB_UAT")
 
-    dest_conn_str = f"dbname={dest_conn_info.schema} user={dest_conn_info.login} password={dest_conn_info.password} host={dest_conn_info.host} port={dest_conn_info.port}"
-    return psycopg2.connect(dest_conn_str)
+    conn_str = (
+        f"dbname={dest_conn_info.schema} "
+        f"user={dest_conn_info.login} "
+        f"password={dest_conn_info.password} "
+        f"host={dest_conn_info.host} "
+        f"port={dest_conn_info.port}"
+    )
+    dbName = dest_conn_info.schema
+    logging.info(f"Connecting to report database: {dbName}")
+    return psycopg2.connect(conn_str), dbName

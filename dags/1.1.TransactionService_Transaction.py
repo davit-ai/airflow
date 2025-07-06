@@ -11,7 +11,7 @@ from airflow.hooks.base_hook import BaseHook
 from airflow.operators.python_operator import PythonOperator
 from ReportConnection import get_reportdb_connection, get_transaction_connection
 from TableInformation import get_fromdate_todate, get_Table_columns
-from utilities import default_args
+from utilities import default_args, get_stored_procedure_for_table, truncateTable
 
 local_tz = pendulum.timezone("Asia/Kuala_Lumpur")
 
@@ -21,7 +21,7 @@ dag = DAG(
     "1.01.initial_Transaction",
     default_args=default_args,
     description="Transfer data from mssql.dbo.mirs to postgres.public.report",
-    schedule_interval="*/5 * * * *",
+    schedule_interval=None,
     tags=[
         f"{Report_table_name.split('_')[0]}_{Report_table_name.split('_')[1]}",
         "Report_UAT",
@@ -54,12 +54,13 @@ def transfer_data():
     try:
         source_conn = get_transaction_connection()
         logging.info("Connected to source database.")
-        dest_conn = get_reportdb_connection()
+
+        dest_conn, dbName = get_reportdb_connection()
         logging.info("Connected to destination database.")
 
         with source_conn.cursor() as source_cur, dest_conn.cursor() as dest_cur:
             column_names = get_Table_columns(
-                dest_cur=get_reportdb_connection().cursor(),
+                dest_cur=dest_cur,
                 table_name=Report_table_name,
             )
             column_str = ", ".join(column_names)
@@ -69,44 +70,42 @@ def transfer_data():
             )
 
             if p_synchour is None:
-                truncate_query = (
-                    'TRUNCATE TABLE report_uat.public."TransactionService_Transaction"'
-                )
-                dest_cur.execute(truncate_query)
+                query = truncateTable(table_name=Report_table_name)
+
+                dest_cur.execute(query)
                 logging.info("Destination table truncated.")
 
                 batch_size = 100
                 offset = 0
 
+                spName = get_stored_procedure_for_table(table_name=Report_table_name)
+                print(f"Executing SP query: {spName}")
                 while True:
                     query = f"""
-                        EXEC dbo.usp_Transaction_pipeline @Offset=?, @FetchNext=?, @p_fromdate=?, @p_todate=?
+                        EXEC dbo.{spName} @Offset=?, @FetchNext=?, @p_fromdate=?, @p_todate=?
                     """
+
                     source_cur.execute(
                         query, (offset, batch_size, p_fromdate, p_todate)
                     )
                     rows = source_cur.fetchall()
                     if not rows:
                         break
-
                     buffer = StringIO()
                     writer = csv.writer(buffer, delimiter="\t")
                     writer.writerows(rows)
                     buffer.seek(0)
-
                     # Perform bulk insert using COPY
                     dest_cur.copy_expert(
                         f"""
-                        COPY report_uat.public."%s" ({column_str})
+                        COPY "{Report_table_name}" ({column_str})
                         FROM STDIN WITH (FORMAT CSV, DELIMITER '\t')
                         """,
-                        (Report_table_name,),
                         buffer,
                     )
                     dest_conn.commit()
                     logging.info(
-                        f"Batchs inserted into '%s'. Rows inserted: {len(rows)}",
-                        (Report_table_name,),
+                        f"Batchs inserted into '{Report_table_name}'. Rows inserted: {len(rows)}"
                     )
 
                     offset += batch_size
@@ -129,16 +128,20 @@ def transfer_data():
                     writer.writerows(rows)
                     buffer.seek(0)
 
-                    dest_cur.execute("""
-                    CREATE TEMP TABLE temp_txn_transaction (
-                        LIKE report_uat.public."TransactionService_Transaction"
-                        INCLUDING DEFAULTS INCLUDING CONSTRAINTS) """)
+                    dest_cur.execute(
+                        f"""
+                    CREATE TEMP TABLE temp_'%s' (
+                        LIKE "{Report_table_name}"
+                        INCLUDING DEFAULTS INCLUDING CONSTRAINTS) """,
+                        (Report_table_name,),
+                    )
 
                     dest_cur.copy_expert(
                         f"""
-                        COPY temp_txn_transaction ({column_str})
+                        COPY temp_'%s' ({column_str})
                         FROM STDIN WITH (FORMAT CSV, DELIMITER '\t')
                         """,
+                        (Report_table_name,),
                         buffer,
                     )
 
@@ -150,7 +153,7 @@ def transfer_data():
                         ]
                     )
                     upsert_sql = f"""
-                         INSERT INTO report_uat.public."TransactionService_Transaction" ({column_str})
+                         INSERT INTO "{Report_table_name}" ({column_str})
                          SELECT {column_str} FROM temp_txn_transaction
                          ON CONFLICT ({p_primarykey}) DO UPDATE
                          SET {set_clause}, "dag_updateddate" = NOW()"""
@@ -164,10 +167,10 @@ def transfer_data():
             # Update sync details once all data has been inserted
             current_timestamp = pendulum.now("Asia/Kuala_Lumpur")
             dest_cur.execute(
-                """
-                UPDATE report_uat.public.data_sync_details
+                f"""
+                UPDATE data_sync_details
                 SET last_sync_date = %s AT TIME ZONE 'Asia/Kuala_Lumpur'
-                WHERE table_name = 'TransactionService_Transaction'
+                WHERE table_name = '{Report_table_name}'
                 """,
                 (current_timestamp,),
             )
