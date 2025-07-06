@@ -11,14 +11,24 @@ from airflow.hooks.base_hook import BaseHook
 from airflow.operators.python_operator import PythonOperator
 from ReportConnection import get_reportdb_connection, get_transaction_connection
 from TableInformation import get_fromdate_todate, get_Table_columns
-from utilities import default_args, get_stored_procedure_for_table, truncateTable
+from utilities import (
+    default_args,
+    get_stored_procedure_for_table,
+    truncateTable,
+    update_data_syncDetails,
+    updateInsert,
+)
 
+## malaysia ko local timezone
 local_tz = pendulum.timezone("Asia/Kuala_Lumpur")
-
+## table ra store procedure ko naam haru
 Report_table_name = "TransactionService_Transaction"
+temp_table_name = f"temp_{Report_table_name}"
+spName = get_stored_procedure_for_table(table_name=Report_table_name)
 
+## basic dag lai chaine kura haru
 dag = DAG(
-    "1.01.initial_Transaction",
+    f"{Report_table_name.split('_', 1)[1]}_Reporting",
     default_args=default_args,
     description="Transfer data from mssql.dbo.mirs to postgres.public.report",
     schedule_interval=None,
@@ -29,6 +39,7 @@ dag = DAG(
 )
 
 
+## table transfer garna lai chaine kura haru
 def get_rows_for_update(
     source_cur,
     p_fromdate,
@@ -43,8 +54,8 @@ def get_rows_for_update(
     batch_size = 1000
     offset = 0
 
-    query = """
-    EXEC dbo.usp_Transaction_pipeline @Offset=?, @FetchNext=?, @p_fromdate=?, @p_todate=?
+    query = f"""
+    EXEC dbo.{spName} @Offset=?, @FetchNext=?, @p_fromdate=?, @p_todate=?
     """
     source_cur.execute(query, (offset, batch_size, p_fromdate, p_todate))
     return source_cur.fetchall()
@@ -78,7 +89,6 @@ def transfer_data():
                 batch_size = 100
                 offset = 0
 
-                spName = get_stored_procedure_for_table(table_name=Report_table_name)
                 print(f"Executing SP query: {spName}")
                 while True:
                     query = f"""
@@ -127,21 +137,21 @@ def transfer_data():
                     writer = csv.writer(buffer, delimiter="\t")
                     writer.writerows(rows)
                     buffer.seek(0)
-
+                    ## yo function le temp table create garne kaam garcha
+                    ## ani temp table ma data copy garne kaam garcha
                     dest_cur.execute(
                         f"""
-                    CREATE TEMP TABLE temp_'%s' (
+                    CREATE TEMP TABLE "{temp_table_name}" (
                         LIKE "{Report_table_name}"
                         INCLUDING DEFAULTS INCLUDING CONSTRAINTS) """,
                         (Report_table_name,),
                     )
-
+                    ## ani temp table ma data copy garne kaam garcha
                     dest_cur.copy_expert(
                         f"""
-                        COPY temp_'%s' ({column_str})
+                        COPY "{temp_table_name}" ({column_str})
                         FROM STDIN WITH (FORMAT CSV, DELIMITER '\t')
                         """,
-                        (Report_table_name,),
                         buffer,
                     )
 
@@ -152,31 +162,27 @@ def transfer_data():
                             if col.strip('"') != p_primarykey
                         ]
                     )
-                    upsert_sql = f"""
-                         INSERT INTO "{Report_table_name}" ({column_str})
-                         SELECT {column_str} FROM temp_txn_transaction
-                         ON CONFLICT ({p_primarykey}) DO UPDATE
-                         SET {set_clause}, "dag_updateddate" = NOW()"""
 
-                    dest_cur.execute(upsert_sql)
-                    dest_conn.commit()
-                    logging.info(
-                        f"Rows updated in Transaction table. Rows inserted: {len(rows)}"
+                    ## yo fucntion le upsert garne kaam garcha
+                    updateInsert(
+                        dest_cur=dest_cur,
+                        dest_conn=dest_conn,
+                        Report_table_name=Report_table_name,
+                        temp_table_name=temp_table_name,
+                        column_str=column_str,
+                        p_primarykey=p_primarykey,
+                        set_clause=set_clause,
+                        rows=rows,
                     )
 
             # Update sync details once all data has been inserted
             current_timestamp = pendulum.now("Asia/Kuala_Lumpur")
-            dest_cur.execute(
-                f"""
-                UPDATE data_sync_details
-                SET last_sync_date = %s AT TIME ZONE 'Asia/Kuala_Lumpur'
-                WHERE table_name = '{Report_table_name}'
-                """,
-                (current_timestamp,),
-            )
-            dest_conn.commit()
-            logging.info(
-                "Data transfer completed successfully and sync details updated."
+
+            update_data_syncDetails(
+                dest_cur=dest_cur,
+                dest_conn=dest_conn,
+                table_name=Report_table_name,
+                current_timestamp=current_timestamp,
             )
 
     except Exception as e:
@@ -185,5 +191,7 @@ def transfer_data():
 
 
 transfer_data_task = PythonOperator(
-    task_id="1.01.initial_Transaction", python_callable=transfer_data, dag=dag
+    task_id=f"{Report_table_name.split('_', 1)[1]}_Reporting",
+    python_callable=transfer_data,
+    dag=dag,
 )
