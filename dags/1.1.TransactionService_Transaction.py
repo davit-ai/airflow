@@ -9,7 +9,7 @@ import pyodbc
 from airflow import DAG
 from airflow.hooks.base_hook import BaseHook
 from airflow.operators.python_operator import PythonOperator
-from connection import get_reportdb_connection, get_transaction_connection
+from ReportConnection import get_reportdb_connection, get_transaction_connection
 from TableInformation import get_fromdate_todate, get_Table_columns
 from utilities import default_args
 
@@ -60,14 +60,12 @@ def transfer_data():
         with source_conn.cursor() as source_cur, dest_conn.cursor() as dest_cur:
             column_names = get_Table_columns(
                 dest_cur=get_reportdb_connection().cursor(),
-                table_name="TransactionService_Transaction",
+                table_name=Report_table_name,
             )
             column_str = ", ".join(column_names)
 
             (p_fromdate, p_todate, p_synchour, p_primarykey, p_last_sync_date) = (
-                get_fromdate_todate(
-                    dest_cur, table_name="TransactionService_Transaction"
-                )
+                get_fromdate_todate(dest_cur, table_name=Report_table_name)
             )
 
             if p_synchour is None:
@@ -99,14 +97,16 @@ def transfer_data():
                     # Perform bulk insert using COPY
                     dest_cur.copy_expert(
                         f"""
-                        COPY report_uat.public."TransactionService_Transaction" ({column_str})
+                        COPY report_uat.public."%s" ({column_str})
                         FROM STDIN WITH (FORMAT CSV, DELIMITER '\t')
                         """,
+                        (Report_table_name,),
                         buffer,
                     )
                     dest_conn.commit()
                     logging.info(
-                        f"Batchs inserted into Transaction table. Rows inserted: {len(rows)}"
+                        f"Batchs inserted into '%s'. Rows inserted: {len(rows)}",
+                        (Report_table_name,),
                     )
 
                     offset += batch_size

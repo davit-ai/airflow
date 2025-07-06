@@ -16,9 +16,12 @@ def get_Table_columns(dest_cur, table_name):
 
 
 def get_fromdate_todate(dest_cur, table_name):
-    dest_cur.execute("""
+    dest_cur.execute(
+        """
        selecT p_fromdate,p_todate,p_synchour,p_primarykey ,p_last_sync_date from synchour(%s);
-    """)
+    """,
+        (table_name,),
+    )
     p_fromdate, p_todate, p_synchour, p_primarykey, p_last_sync_date = (
         dest_cur.fetchone()
     )
