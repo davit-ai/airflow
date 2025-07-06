@@ -10,13 +10,14 @@ from airflow import DAG
 from airflow.hooks.base_hook import BaseHook
 from airflow.operators.python_operator import PythonOperator
 from ReportConnection import get_reportdb_connection, get_transaction_connection
-from TableInformation import get_fromdate_todate, get_Table_columns
 from utilities import (
     default_args,
-    get_stored_procedure_for_table,
-    truncateTable,
-    update_data_syncDetails,
-    updateInsert,
+    get_fromdate_todate, ## yesle fromdate ra todate ko value haru return garcha sync hour anusar
+    get_stored_procedure_for_table, ## yo function le table ko naam anusar stored procedure ko naam return garcha
+    get_Table_columns, ## yo function le table ko column haru ko naam return garcha
+    truncateTable, ## yo function le table lai truncate garne kaam garcha
+    update_data_syncDetails, ## yo function le data sync details update garne kaam garcha
+    updateInsert, ## yo function le upsert garne kaam garcha
 )
 
 ## malaysia ko local timezone
