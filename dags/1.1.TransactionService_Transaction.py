@@ -12,12 +12,12 @@ from airflow.operators.python_operator import PythonOperator
 from ReportConnection import get_reportdb_connection, get_transaction_connection
 from utilities import (
     default_args,
-    get_fromdate_todate, ## yesle fromdate ra todate ko value haru return garcha sync hour anusar
-    get_stored_procedure_for_table, ## yo function le table ko naam anusar stored procedure ko naam return garcha
-    get_Table_columns, ## yo function le table ko column haru ko naam return garcha
-    truncateTable, ## yo function le table lai truncate garne kaam garcha
-    update_data_syncDetails, ## yo function le data sync details update garne kaam garcha
-    updateInsert, ## yo function le upsert garne kaam garcha
+    get_fromdate_todate,  ## yesle fromdate ra todate ko value haru return garcha sync hour anusar
+    get_stored_procedure_for_table,  ## yo function le table ko naam anusar stored procedure ko naam return garcha
+    get_Table_columns,  ## yo function le table ko column haru ko naam return garcha
+    truncateTable,  ## yo function le table lai truncate garne kaam garcha
+    update_data_syncDetails,  ## yo function le data sync details update garne kaam garcha
+    updateInsert,  ## yo function le upsert garne kaam garcha
 )
 
 ## malaysia ko local timezone
@@ -54,12 +54,6 @@ def get_rows_for_update(
     column_list = ", ".join(column_names)
     batch_size = 1000
     offset = 0
-
-    query = f"""
-    EXEC dbo.{spName} @Offset=?, @FetchNext=?, @p_fromdate=?, @p_todate=?
-    """
-    source_cur.execute(query, (offset, batch_size, p_fromdate, p_todate))
-    return source_cur.fetchall()
 
 
 def transfer_data():
